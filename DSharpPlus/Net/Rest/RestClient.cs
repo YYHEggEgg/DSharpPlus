@@ -4,9 +4,12 @@ using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+
 using DSharpPlus.Exceptions;
 using DSharpPlus.Metrics;
+using DSharpPlus.Net.Rest.Ratelimits;
 using Microsoft.Extensions.Logging;
+
 using Polly;
 
 namespace DSharpPlus.Net;
@@ -24,7 +27,7 @@ internal sealed partial class RestClient : IDisposable
     private readonly ILogger logger;
     private readonly AsyncManualResetEvent globalRateLimitEvent;
     private readonly ResiliencePipeline<HttpResponseMessage> pipeline;
-    private readonly RateLimitStrategy rateLimitStrategy;
+    private readonly RatelimitStrategy rateLimitStrategy;
     private readonly RequestMetricsContainer metrics = new();
 
     private volatile bool _disposed;
@@ -41,8 +44,8 @@ internal sealed partial class RestClient : IDisposable
             config.MaximumRestRequestsPerSecond
         )
     {
-        httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", Utilities.GetFormattedToken(config));
-        httpClient.BaseAddress = new(Endpoints.BASE_URI);
+        this.httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", Utilities.GetFormattedToken(config));
+        this.httpClient.BaseAddress = new(Endpoints.BASE_URI);
     }
 
     // This is for meta-clients, such as the webhook client
@@ -67,18 +70,18 @@ internal sealed partial class RestClient : IDisposable
             Proxy = proxy
         };
 
-        httpClient = new HttpClient(httphandler)
+        this.httpClient = new HttpClient(httphandler)
         {
             BaseAddress = new Uri(Utilities.GetApiBaseUri()),
             Timeout = timeout
         };
 
-        httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", Utilities.GetUserAgent());
-        httpClient.BaseAddress = new(Endpoints.BASE_URI);
+        this.httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", Utilities.GetUserAgent());
+        this.httpClient.BaseAddress = new(Endpoints.BASE_URI);
 
-        globalRateLimitEvent = new AsyncManualResetEvent(true);
+        this.globalRateLimitEvent = new AsyncManualResetEvent(true);
 
-        rateLimitStrategy = new(logger, waitingForHashMilliseconds, maximumRequestsPerSecond);
+        this.rateLimitStrategy = new(logger, waitingForHashMilliseconds, maximumRequestsPerSecond);
 
         ResiliencePipelineBuilder<HttpResponseMessage> builder = new();
 
@@ -87,14 +90,14 @@ internal sealed partial class RestClient : IDisposable
             new()
             {
                 DelayGenerator = result =>
-                    ValueTask.FromResult<TimeSpan?>((result.Outcome.Exception as PreemptiveRatelimitException)?.ResetAfter
+                    ValueTask.FromResult<TimeSpan?>((result.Outcome.Exception as PreemptiveRatelimitException)?.ResetAfter 
                         ?? TimeSpan.FromSeconds(retryDelayFallback)),
                 MaxRetryAttempts = maxRetries
             }
         )
-        .AddStrategy(_ => rateLimitStrategy, new RateLimitOptions());
+        .AddStrategy(_ => rateLimitStrategy, new RatelimitOptions());
 
-        pipeline = builder.Build();
+        this.pipeline = builder.Build();
     }
 
     internal async ValueTask<RestResponse> ExecuteRequestAsync<TRequest>
@@ -103,7 +106,7 @@ internal sealed partial class RestClient : IDisposable
     )
         where TRequest : struct, IRestRequest
     {
-        if (_disposed)
+        if (this._disposed)
         {
             throw new ObjectDisposedException
             (
@@ -114,8 +117,8 @@ internal sealed partial class RestClient : IDisposable
 
         try
         {
-            await globalRateLimitEvent.WaitAsync();
-
+            await this.globalRateLimitEvent.WaitAsync();
+            
             Ulid traceId = Ulid.NewUlid();
 
             ResilienceContext context = ResilienceContextPool.Shared.Get();
@@ -123,13 +126,13 @@ internal sealed partial class RestClient : IDisposable
             context.Properties.Set(new("route"), request.Route);
             context.Properties.Set(new("exempt-from-global-limit"), request.IsExemptFromGlobalLimit);
             context.Properties.Set(new("trace-id"), traceId);
-
-            using HttpResponseMessage response = await pipeline.ExecuteAsync
+            
+            using HttpResponseMessage response = await this.pipeline.ExecuteAsync
             (
                 async (_) =>
                 {
                     using HttpRequestMessage req = request.Build();
-                    return await httpClient.SendAsync
+                    return await this.httpClient.SendAsync
                     (
                         req,
                         HttpCompletionOption.ResponseContentRead,
@@ -144,33 +147,33 @@ internal sealed partial class RestClient : IDisposable
             string content = await response.Content.ReadAsStringAsync();
 
             // consider logging headers too
-            logger.LogTrace(LoggerEvents.RestRx, "Request {TraceId}: {Content}", traceId, content);
+            this.logger.LogTrace(LoggerEvents.RestRx, "Request {TraceId}: {Content}",traceId,  content);
 
-            switch (response.StatusCode)
+            switch(response.StatusCode)
             {
                 case HttpStatusCode.BadRequest or HttpStatusCode.MethodNotAllowed:
 
-                    metrics.RegisterBadRequest();
+                    this.metrics.RegisterBadRequest();
                     throw new BadRequestException(request.Build(), response, content);
 
                 case HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden:
 
-                    metrics.RegisterForbidden();
+                    this.metrics.RegisterForbidden();
                     throw new UnauthorizedException(request.Build(), response, content);
 
                 case HttpStatusCode.NotFound:
 
-                    metrics.RegisterNotFound();
+                    this.metrics.RegisterNotFound();
                     throw new NotFoundException(request.Build(), response, content);
 
                 case HttpStatusCode.RequestEntityTooLarge:
 
-                    metrics.RegisterRequestTooLarge();
+                    this.metrics.RegisterRequestTooLarge();
                     throw new RequestSizeException(request.Build(), response, content);
 
                 case HttpStatusCode.TooManyRequests:
 
-                    metrics.RegisterRatelimitHit(response.Headers);
+                    this.metrics.RegisterRatelimitHit(response.Headers);
                     throw new RateLimitException(request.Build(), response, content);
 
                 case HttpStatusCode.InternalServerError
@@ -178,12 +181,12 @@ internal sealed partial class RestClient : IDisposable
                     or HttpStatusCode.ServiceUnavailable
                     or HttpStatusCode.GatewayTimeout:
 
-                    metrics.RegisterServerError();
+                    this.metrics.RegisterServerError();
                     throw new ServerErrorException(request.Build(), response, content);
 
                 default:
 
-                    metrics.RegisterSuccess();
+                    this.metrics.RegisterSuccess();
                     break;
             }
 
@@ -195,7 +198,7 @@ internal sealed partial class RestClient : IDisposable
         }
         catch (Exception ex)
         {
-            logger.LogError
+            this.logger.LogError
             (
                 LoggerEvents.RestError,
                 ex,
@@ -212,24 +215,24 @@ internal sealed partial class RestClient : IDisposable
     /// </summary>
     /// <param name="sinceLastCall">If set to true, this resets the counter. Lifetime metrics are unaffected.</param>
     /// <returns>A snapshot of the rest metrics.</returns>
-    public RequestMetricsCollection GetRequestMetrics(bool sinceLastCall = false)
-        => sinceLastCall ? metrics.GetTemporalMetrics() : metrics.GetLifetimeMetrics();
+    public RequestMetricsCollection GetRequestMetrics(bool sinceLastCall = false) 
+        => sinceLastCall ? this.metrics.GetTemporalMetrics() : this.metrics.GetLifetimeMetrics();
 
     public void Dispose()
     {
-        if (_disposed)
+        if (this._disposed)
         {
             return;
         }
 
-        _disposed = true;
+        this._disposed = true;
 
-        globalRateLimitEvent.Reset();
-        rateLimitStrategy.Dispose();
+        this.globalRateLimitEvent.Reset();
+        this.rateLimitStrategy.Dispose();
 
         try
         {
-            httpClient?.Dispose();
+            this.httpClient?.Dispose();
         }
         catch { }
     }
