@@ -8,18 +8,18 @@ namespace DSharpPlus.Net;
 /// <summary>
 /// Represents a non-multipart HTTP request.
 /// </summary>
-internal readonly record struct RestRequest : IRestRequest
+internal sealed record RestRequest : IRestRequest
 {
     /// <inheritdoc/>
-    public string Url { get; init; }
+    public required string Url { get; init; }
 
     /// <summary>
     /// The method for this request.
     /// </summary>
-    public HttpMethod Method { get; init; }
+    public required HttpMethod Method { get; init; }
 
     /// <inheritdoc/>
-    public string Route { get; init; }
+    public required string Route { get; init; }
 
     /// <inheritdoc/>
     public bool IsExemptFromGlobalLimit { get; init; }
@@ -39,19 +39,19 @@ internal readonly record struct RestRequest : IRestRequest
     {
         HttpRequestMessage request = new()
         {
-            Method = Method,
-            RequestUri = new($"{Endpoints.BASE_URI}/{Url}")
+            Method = this.Method,
+            RequestUri = new($"{Endpoints.BASE_URI}/{this.Url}")
         };
 
-        if (Payload is not null)
+        if (this.Payload is not null)
         {
-            request.Content = new StringContent(Payload);
+            request.Content = new StringContent(this.Payload);
             request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/json");
         }
 
-        if (Headers is not null)
+        if (this.Headers is not null)
         {
-            foreach (KeyValuePair<string, string> header in Headers)
+            foreach (KeyValuePair<string, string> header in this.Headers)
             {
                 request.Headers.Add(header.Key, Uri.EscapeDataString(header.Value));
             }

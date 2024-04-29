@@ -1,176 +1,100 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Net.Http.Headers;
+using System.Diagnostics;
 using System.Threading;
-using DSharpPlus.Net.Rest.Ratelimits;
+using System.Threading.Channels;
+using System.Threading.Tasks;
+
+using Microsoft.Extensions.ObjectPool;
 
 namespace DSharpPlus.Net.Ratelimits;
 
 /// <summary>
 /// Represents a rate limit bucket.
 /// </summary>
-internal sealed class RatelimitBucket
+internal sealed class RatelimitBucket : IResettable
 {
-    /// <summary>
-    /// Gets the number of uses left before pre-emptive rate limit is triggered.
-    /// </summary>
-    public int Remaining
-        => this.remaining;
+    private bool live;
 
-    /// <summary>
-    /// Gets the timestamp at which the rate limit resets.
-    /// </summary>
-    public DateTime Reset { get; internal set; }
+    private int maximum;
+    private int remaining;
+    private DateTimeOffset resetsAt;
 
-    /// <summary>
-    /// Gets the maximum number of uses within a single bucket.
-    /// </summary>
-    public int Maximum => this.maximum;
+    private string hash = "UNSET";
+    private readonly List<string> routes = [];
 
-    internal int maximum;
-    internal int remaining;
-    internal int reserved = 0;
+    private TransportRequestContainer activeRequests;
+    private readonly Channel<TransportRequest> requestQueue;
+    private readonly IRatelimiter ratelimiter;
+    private readonly RestClient restClient;
+    private readonly ObjectPool<RatelimitBucket> pool;
 
-    public RatelimitBucket
-    (
-        int maximum,
-        int remaining,
-        DateTime reset
-    )
+    public bool TryReset()
     {
-        this.maximum = maximum;
-        this.remaining = remaining;
-        this.Reset = reset;
-    }
+        Debug.Assert(this.requestQueue.Reader.Count == 0);
 
-    public RatelimitBucket()
-    {
-        this.maximum = 1;
-        this.remaining = 1;
-        this.Reset = DateTime.MaxValue;
-        this.reserved = 0;
-    }
+        this.live = false;
+        this.hash = "UNSET";
+        this.routes.Clear();
 
-    /// <summary>
-    /// Resets the bucket to the next reset time.
-    /// </summary>
-    internal void ResetLimit(DateTime nextReset)
-    {
-        if (nextReset < this.Reset)
-        {
-            throw new ArgumentOutOfRangeException
-            (
-                nameof(nextReset),
-                "The next ratelimit expiration must follow the present expiration."
-            );
-        }
-
-        Interlocked.Exchange(ref this.remaining, this.Maximum);
-        this.Reset = nextReset;
-    }
-
-    public static bool TryExtractRateLimitBucket
-    (
-        HttpResponseHeaders headers,
-
-        out RatelimitCandidateBucket bucket
-    )
-    {
-        bucket = default;
-
-        try
-        {
-            if
-            (
-                !headers.TryGetValues("X-RateLimit-Limit", out IEnumerable<string>? limitRaw)
-                || !headers.TryGetValues("X-RateLimit-Remaining", out IEnumerable<string>? remainingRaw)
-                || !headers.TryGetValues("X-RateLimit-Reset-After", out IEnumerable<string>? ratelimitResetRaw)
-            )
-            {
-                return false;
-            }
-
-            if
-            (
-                !int.TryParse(limitRaw.SingleOrDefault(), CultureInfo.InvariantCulture, out int limit)
-                || !int.TryParse(remainingRaw.SingleOrDefault(), CultureInfo.InvariantCulture, out int remaining)
-                || !double.TryParse(ratelimitResetRaw.SingleOrDefault(), CultureInfo.InvariantCulture, out double ratelimitReset)
-            )
-            {
-                return false;
-            }
-
-            DateTime reset = (DateTimeOffset.UtcNow + TimeSpan.FromSeconds(ratelimitReset)).UtcDateTime;
-
-            bucket = new(limit, remaining, reset);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    internal bool CheckNextRequest()
-    {
-        if (this.Reset < DateTime.UtcNow)
-        {
-            this.ResetLimit(DateTime.UtcNow + TimeSpan.FromSeconds(1));
-            Interlocked.Increment(ref this.reserved);
-            return true;
-        }
-
-        if (this.Remaining - this.reserved <= 0)
-        {
-            return false;
-        }
-
-        Interlocked.Increment(ref this.reserved);
         return true;
     }
 
-    internal void UpdateBucket(int maximum, int remaining, DateTime reset)
+    // this logic assumes that this is being called after a first request was made. from there, there are two outcomes:
+    // another request is being made or we expire.
+    // from thereon, if we get a request we will try our utmost to dispatch it - if we have a request, we will wait for
+    // a slot to be free and then check whether we're allowed to do that. one annoying side effect is that this request
+    // may be dispatched to a dead bucket, but we'll deal with that.
+    public async Task LoopAsync()
     {
-        Interlocked.Exchange(ref this.maximum, maximum);
-        Interlocked.Exchange(ref this.remaining, remaining);
+        TransportRequest request;
 
-        if (this.reserved > 0)
+        while (true)
         {
-            Interlocked.Decrement(ref this.reserved);
-        }
-
-        this.Reset = reset;
-    }
-
-    internal void CancelReservation()
-    {
-        if (this.reserved > 0)
-        {
-            Interlocked.Decrement(ref this.reserved);
-        }
-    }
-
-    internal void CompleteReservation()
-    {
-        if (this.Reset < DateTime.UtcNow)
-        {
-            this.ResetLimit(DateTime.UtcNow + TimeSpan.FromSeconds(1));
-
-            if (this.reserved > 0)
+            try
             {
-                Interlocked.Decrement(ref this.reserved);
+                CancellationTokenSource cts = new(this.resetsAt - DateTimeOffset.UtcNow);
+                request = await requestQueue.Reader.ReadAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (this.activeRequests.GetActiveRequestCount() == 0)
+                {
+                    break;
+                }
+
+                await Task.Delay(this.resetsAt - DateTimeOffset.UtcNow);
+                continue;
             }
 
-            return;
+            await this.activeRequests.WaitForFreeSlotAsync();
+
+            while (this.activeRequests.GetActiveRequestCount() + this.remaining > this.maximum)
+            {
+                await Task.Delay(this.resetsAt - DateTimeOffset.UtcNow);
+            }
+
+            this.activeRequests.RegisterRequest(request);
+            _ = request.ExecuteRequestAsync(request.RequestObject).ContinueWith
+            (
+                (task, state) =>
+                {
+                    if (state is not TransportRequest request)
+                    {
+                        return;
+                    }
+
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        return;
+                    }
+
+                    this.UpdateRatelimits(task.Result);
+                    request.ResultSource.SetResult(task.Result);
+                }
+            );
         }
 
-        Interlocked.Decrement(ref this.remaining);
-
-        if (this.reserved > 0)
-        {
-            Interlocked.Decrement(ref this.reserved);
-        }
+        this.pool.Return(this);
     }
 }

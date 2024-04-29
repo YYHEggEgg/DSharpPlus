@@ -7,7 +7,8 @@ using System.Threading.Tasks;
 
 using DSharpPlus.Exceptions;
 using DSharpPlus.Metrics;
-using DSharpPlus.Net.Rest.Ratelimits;
+using DSharpPlus.Net.Ratelimits;
+
 using Microsoft.Extensions.Logging;
 
 using Polly;
@@ -100,11 +101,10 @@ internal sealed partial class RestClient : IDisposable
         this.pipeline = builder.Build();
     }
 
-    internal async ValueTask<RestResponse> ExecuteRequestAsync<TRequest>
+    internal async ValueTask<RestResponse> ExecuteRequestAsync
     (
-        TRequest request
+        IRestRequest request
     )
-        where TRequest : struct, IRestRequest
     {
         if (this._disposed)
         {
