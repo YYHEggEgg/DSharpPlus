@@ -38,7 +38,15 @@ internal struct RatelimitResetTime(DateTimeOffset nextReset)
     public DateTimeOffset NextResetTime { get; private set; } = nextReset;
     public bool Synthetic { get; private set; } = false;
 
-    public readonly TimeSpan UntilReset => DateTimeOffset.UtcNow - this.NextResetTime;
+    public readonly TimeSpan UntilReset
+    {
+        get
+        {
+            return DateTimeOffset.UtcNow > this.NextResetTime
+                ? TimeSpan.FromTicks(0)
+                : this.NextResetTime - DateTimeOffset.UtcNow;
+        }
+    }
 
     /// <summary>
     /// Sets the next reset time as obtained from Discord.

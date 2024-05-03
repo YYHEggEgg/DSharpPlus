@@ -18,7 +18,7 @@ internal sealed class RatelimitBucket : IResettable
 
     private int maximum;
     private int remaining;
-    private DateTimeOffset resetsAt;
+    private RatelimitResetTime resetsAt;
 
     private string hash = "UNSET";
     private readonly List<string> routes = [];
@@ -53,7 +53,7 @@ internal sealed class RatelimitBucket : IResettable
         {
             try
             {
-                CancellationTokenSource cts = new(this.resetsAt - DateTimeOffset.UtcNow);
+                CancellationTokenSource cts = new(this.resetsAt.UntilReset);
                 request = await requestQueue.Reader.ReadAsync(cts.Token);
             }
             catch (OperationCanceledException)
@@ -63,7 +63,7 @@ internal sealed class RatelimitBucket : IResettable
                     break;
                 }
 
-                await Task.Delay(this.resetsAt - DateTimeOffset.UtcNow);
+                await Task.Delay(this.resetsAt.UntilReset);
                 continue;
             }
 
@@ -71,7 +71,7 @@ internal sealed class RatelimitBucket : IResettable
 
             while (this.activeRequests.GetActiveRequestCount() + this.remaining > this.maximum)
             {
-                await Task.Delay(this.resetsAt - DateTimeOffset.UtcNow);
+                await Task.Delay(this.resetsAt.UntilReset);
             }
 
             this.activeRequests.RegisterRequest(request);
