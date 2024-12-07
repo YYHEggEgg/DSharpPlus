@@ -42,7 +42,10 @@ public class DiscordRestClient : BaseDiscordClient
         {
             foreach (KeyValuePair<string, string> pair in options.RequestHeaders)
             {
-                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(pair.Key, pair.Value);
+                if (!httpClient.DefaultRequestHeaders.Contains(pair.Key))
+                {
+                    httpClient.DefaultRequestHeaders.TryAddWithoutValidation(pair.Key, pair.Value);
+                }
             }
         }
 
