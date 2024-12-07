@@ -38,12 +38,12 @@ internal readonly record struct RestRequest : IRestRequest
     public bool IsExemptFromAllLimits { get; init; }
 
     /// <inheritdoc/>
-    public HttpRequestMessage Build()
+    public HttpRequestMessage Build(string? baseUrl = null)
     {
         HttpRequestMessage request = new()
         {
             Method = this.Method,
-            RequestUri = new($"{Endpoints.BASE_URI}/{this.Url}")
+            RequestUri = new($"{baseUrl ?? Endpoints.BASE_URI}/{this.Url}")
         };
 
         if (this.Payload is not null)
