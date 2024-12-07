@@ -68,12 +68,12 @@ internal readonly record struct MultipartRestRequest : IRestRequest
     /// <inheritdoc/>
     public bool IsExemptFromAllLimits { get; init; }
 
-    public HttpRequestMessage Build()
+    public HttpRequestMessage Build(string? baseUrl)
     {
         HttpRequestMessage request = new()
         {
             Method = this.Method,
-            RequestUri = new($"{Endpoints.BASE_URI}/{this.Url}")
+            RequestUri = new($"{baseUrl ?? Endpoints.BASE_URI}/{this.Url}")
         };
 
         if (this.Headers is not null)

@@ -10,7 +10,7 @@ internal interface IRestRequest
     /// <summary>
     /// Builds the current rest request object into a request message.
     /// </summary>
-    public HttpRequestMessage Build();
+    public HttpRequestMessage Build(string? baseUrl = null);
 
     /// <summary>
     /// The URL this request is made to. This is distinct from the <seealso cref="Route"/> in that the route
