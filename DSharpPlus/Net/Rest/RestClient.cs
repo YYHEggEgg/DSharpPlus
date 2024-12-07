@@ -164,7 +164,7 @@ public sealed partial class RestClient : IDisposable
             (
                 async (_) =>
                 {
-                    using HttpRequestMessage req = request.Build(this.httpClient.BaseAddress);
+                    using HttpRequestMessage req = request.Build(this.httpClient.BaseAddress.ToString());
                     return await this.httpClient.SendAsync
                     (
                         req,
