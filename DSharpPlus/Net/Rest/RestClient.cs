@@ -42,9 +42,31 @@ public sealed partial class RestClient : IDisposable
     )
         : this
         (
+            logger,
+            client,
+            options,
+            tokenContainer,
+            null,
+            false
+        )
+    { }
+
+    public RestClient
+    (
+        ILogger<RestClient> logger,
+        HttpClient client,
+        IOptions<RestClientOptions> options,
+        IOptions<TokenContainer> tokenContainer,
+        string? baseUrl,
+        bool addApiVersionAfterBaseUrl
+    )
+        : this
+        (
             client,
             options.Value.Timeout,
             logger,
+            baseUrl,
+            addApiVersionAfterBaseUrl,
             options.Value.MaximumRatelimitRetries,
             (int)options.Value.RatelimitRetryDelayFallback.TotalMilliseconds,
             (int)options.Value.InitialRequestTimeout.TotalMilliseconds,
@@ -54,7 +76,7 @@ public sealed partial class RestClient : IDisposable
         string token = tokenContainer.Value.GetToken();
 
         this.httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bot {token}");
-        this.httpClient.BaseAddress = new(Endpoints.BASE_URI);
+        this.httpClient.BaseAddress = new(baseUrl);
     }
 
     // This is for meta-clients, such as the webhook client
@@ -63,19 +85,25 @@ public sealed partial class RestClient : IDisposable
         HttpClient client,
         TimeSpan timeout,
         ILogger logger,
+        string? baseUrl,
+        bool addApiVersionAfterBaseUrl,
         int maxRetries = int.MaxValue,
         int retryDelayFallback = 2500,
         int waitingForHashMilliseconds = 200,
         int maximumRequestsPerSecond = 15
     )
     {
+        if (baseUrl != null)
+        {
+            baseUrl += addApiVersionAfterBaseUrl ? Endpoints.API_VERSION : string.Empty;
+        }
         this.logger = logger;
         this.httpClient = client;
 
         this.httpClient.BaseAddress = new Uri(Utilities.GetApiBaseUri());
         this.httpClient.Timeout = timeout;
         this.httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", Utilities.GetUserAgent());
-        this.httpClient.BaseAddress = new(Endpoints.BASE_URI);
+        this.httpClient.BaseAddress = new(baseUrl ?? Endpoints.BASE_URI);
 
         this.globalRateLimitEvent = new AsyncManualResetEvent(true);
 

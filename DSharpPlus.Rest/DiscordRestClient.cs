@@ -38,12 +38,21 @@ public class DiscordRestClient : BaseDiscordClient
         
         HttpClient httpClient = new();
         httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"{headerTokenType} {token}");
-        
+        if (options.RequestHeaders != null)
+        {
+            foreach (KeyValuePair<string, string> pair in options.RequestHeaders)
+            {
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(pair.Key, pair.Value);
+            }
+        }
+
         this.ApiClient = new(new
         (
             httpClient,
             options.Timeout,
             logger ?? NullLogger.Instance,
+            options.BaseUrl,
+            options.AddApiVersionAfterBaseUrl,
             options.MaximumRatelimitRetries,
             (int)options.RatelimitRetryDelayFallback.TotalMilliseconds,
             (int)options.InitialRequestTimeout.TotalMilliseconds,

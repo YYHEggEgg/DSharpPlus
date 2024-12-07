@@ -38,7 +38,7 @@ public sealed class DiscordApiClient
 
     // This is for meta-clients, such as the webhook client
     internal DiscordApiClient(TimeSpan timeout, ILogger logger)
-        => this.rest = new(new(), timeout, logger);
+        => this.rest = new(new(), timeout, logger, null, false);
 
     /// <inheritdoc cref="RestClient.GetRequestMetrics(bool)"/>
     internal RequestMetricsCollection GetRequestMetrics(bool sinceLastCall = false)

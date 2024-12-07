@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace DSharpPlus.Net;
 
@@ -40,4 +41,8 @@ public sealed class RestClientOptions
     /// channels. If your bot is heavily flooding very few endpoints, you may even reduce this limit.
     /// </remarks>
     public int MaximumConcurrentRestRequests { get; set; } = 15;
+
+    public IReadOnlyDictionary<string, string>? RequestHeaders { get; set; }
+    public string? BaseUrl { get; set; }
+    public bool AddApiVersionAfterBaseUrl { get; set; }
 }
